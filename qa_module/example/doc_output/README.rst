@@ -1,0 +1,14 @@
+SampleRepo
+==========
+
+Overview
+--------
+A sample Dart project for testing qa_module.
+
+Installation
+------------
+Run ``dart pub get`` and ``dart run``.
+
+Features
+--------
+- Adds two integers and returns their sum.

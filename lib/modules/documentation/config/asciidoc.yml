@@ -1,0 +1,5 @@
+site_name: QA Module Documentation
+nav:
+  - Home: README.adoc
+theme:
+  name: asciidoctor
