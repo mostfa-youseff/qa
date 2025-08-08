@@ -1,0 +1,9 @@
+{
+  "base_model": "CodeLLaMA-7B",
+  "adapter_checkpoint": "/mnt/data/codellama_7b_test_adapter/checkpoint-1000",
+  "ffi_library_path": "libffi/libcodellama.so",
+  "adapters": {
+    "documentation": "dynamic_documentation_adapter",
+    "test_generation": "test_gen_adapter"
+  }
+}
