@@ -3,6 +3,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import PeftModel
 import threading
 import os
+import torch
 
 ffi = cffi.FFI()
 ffi.cdef("""
@@ -19,7 +20,6 @@ lock = threading.Lock()
 def initialize_base_model():
     global model, tokenizer
     if model is None or tokenizer is None:
-        # Use Hugging Face token if required
         hf_token = os.getenv("HF_TOKEN")
         tokenizer = AutoTokenizer.from_pretrained(
             base_model_name,
@@ -30,7 +30,9 @@ def initialize_base_model():
             base_model_name,
             token=hf_token,
             trust_remote_code=True,
-            device_map="auto"
+            device_map="auto",
+            torch_dtype=torch.float16,
+            offload_folder="./offload_dir"
         )
         model.eval()
 
@@ -40,7 +42,10 @@ def get_adapter_model(checkpoint_path):
             adapter_models[checkpoint_path] = PeftModel.from_pretrained(
                 model,
                 checkpoint_path,
-                is_trainable=False
+                is_trainable=False,
+                device_map="auto",
+                torch_dtype=torch.float16
+                offload_folder="./offload_dir" 
             )
             adapter_models[checkpoint_path].eval()
         return adapter_models[checkpoint_path]
@@ -56,7 +61,7 @@ def generate(prompt, adapter_id, checkpoint_path):
         adapter_id_str = ffi.string(adapter_id).decode('utf-8')
 
         if adapter_id_str in ["test_gen_adapter", "dynamic_documentation_adapter"]:
-            inputs = tokenizer(prompt_str, return_tensors="pt")
+            inputs = tokenizer(prompt_str, return_tensors="pt").to(next(adapter_model.parameters()).device)
             outputs = adapter_model.generate(**inputs, max_length=512)
             result = tokenizer.decode(outputs[0], skip_special_tokens=True)
         else:
@@ -65,16 +70,14 @@ def generate(prompt, adapter_id, checkpoint_path):
     except Exception as e:
         result = f"Error: {str(e)}"
 
-    # Allocate memory for the result
-    result_c = ffi.new("char[]", result.encode('utf-8'))
-    return result_c
+    return ffi.new("char[]", result.encode('utf-8'))
 
 @ffi.callback("void free_memory(char* ptr)")
 def free_memory(ptr):
-    # Memory managed by cffi, no action needed
     pass
 
 if __name__ == "__main__":
+    os.makedirs("./offload_dir", exist_ok=True)
     test_prompt = "Generate unit tests for a Dart function"
     test_adapter = "test_gen_adapter"
     test_checkpoint = "/mnt/data/codellama_7b_test_adapter/checkpoint-1000"
