@@ -4,26 +4,29 @@ import 'dart:convert';
 
 class CacheService {
   final _redisConnection = RedisConnection();
+  final String _redisHost = '127.0.0.1';
+  final int _redisPort = 6380;
   final String _qdrantUrl = 'http://localhost:6333/collections/qa_module/points';
 
   Future<String?> get(String key) async {
     try {
-      final command = await _redisConnection.connect('localhost', 6379);
+      final command = await _redisConnection.connect(_redisHost, _redisPort);
       final value = await command.get(key);
       await command.get_connection().close();
       return value as String?;
     } catch (e) {
+      print('Redis get error: $e');
       return null;
     }
   }
 
   Future<void> set(String key, String value) async {
     try {
-      final command = await _redisConnection.connect('localhost', 6379);
+      final command = await _redisConnection.connect(_redisHost, _redisPort);
       await command.set(key, value);
       await command.get_connection().close();
     } catch (e) {
-      print('Cache set error: $e');
+      print('Redis set error: $e');
     }
   }
 

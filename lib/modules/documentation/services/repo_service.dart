@@ -1,9 +1,6 @@
 import 'package:qa_module/shared/git_service.dart';
 import 'dart:io';
 import 'package:yaml/yaml.dart';
-import 'package:analyzer/dart/analysis/analysis_context_collection.dart';
-import 'package:analyzer/dart/analysis/results.dart';
-import 'package:analyzer/dart/ast/token.dart';
 import 'package:qa_module/modules/documentation/models/repo_summary.dart';
 
 class RepoService {
@@ -31,9 +28,6 @@ class RepoService {
       print('Warning: pubspec.yaml not found. Proceeding without it.');
     }
 
-    // حلل كل ملفات دارت في المجلد
-    final comments = await _analyzeCodeComments(repoPath);
-
     final summary = RepoSummary(
       name: pubspecInfo['name'] ?? 'Unknown',
       description: pubspecInfo['description'] ?? 'No description',
@@ -41,7 +35,7 @@ class RepoService {
       dependencies: pubspecInfo['dependencies'] != null
           ? List<String>.from(pubspecInfo['dependencies'])
           : [],
-      comments: comments,
+      comments: [], // رجع قايمة فارغة بدل تحليل التعليقات
     );
 
     await Directory(repoPath).delete(recursive: true);
@@ -90,35 +84,5 @@ class RepoService {
         'dependencies': [],
       };
     }
-  }
-
-  Future<List<String>> _analyzeCodeComments(String repoPath) async {
-    final contextCollection = AnalysisContextCollection(
-      includedPaths: [repoPath],
-    );
-    final comments = <String>[];
-
-    for (final context in contextCollection.contexts) {
-      for (final filePath in context.contextRoot.analyzedFiles()) {
-        if (filePath.endsWith('.dart')) {
-          final parsedUnitResult = await context.currentSession.getParsedUnit(filePath);
-          if (parsedUnitResult is ParsedUnitResult) {
-            final unit = parsedUnitResult.unit;
-            Token? token = unit.beginToken;
-
-            while (token != null) {
-              if (token is CommentToken) {
-                final lexeme = token.lexeme;
-                if (lexeme.startsWith('///') || lexeme.startsWith('/**')) {
-                  comments.add(lexeme.trim());
-                }
-              }
-              token = token.next;
-            }
-          }
-        }
-      }
-    }
-    return comments;
   }
 }

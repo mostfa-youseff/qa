@@ -1,54 +1,68 @@
-// wrapper.c (modified)
+// wrapper.c  -- shared lib wrapper for Python-backed generate_response
 #include <Python.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-// Global flag + module/function handles
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// Exported API prototypes (visible symbols)
+__attribute__((visibility("default")))
+void initialize_python_wrapper();
+
+__attribute__((visibility("default")))
+void finalize_python_wrapper();
+
+__attribute__((visibility("default")))
+char* generate_response(const char* brand, const char* prompt);
+
+// Provide alias 'generate' because some callers (Dart) look up 'generate'
+__attribute__((visibility("default")))
+char* generate(const char* brand, const char* prompt);
+
+// Helper for freeing strings allocated inside this lib
+__attribute__((visibility("default")))
+void free_c_string(char* s);
+
+#ifdef __cplusplus
+}
+#endif
+
+
+// ---------- Implementation ----------
 static int python_initialized = 0;
 static PyObject *pModule_global = NULL;
 static PyObject *pFunc_generate = NULL;
 
-// Call once at process startup
 void initialize_python_wrapper() {
     if (python_initialized) return;
     Py_Initialize();
-    python_initialized = 1;
 
-    // Import module and cache function pointer
+    // Note: PyEval_InitThreads() is deprecated since Python 3.9 and not needed.
+    // Acquire module and function pointer
     PyObject *pName = PyUnicode_DecodeFSDefault("codellama_ffi_module");
     pModule_global = PyImport_Import(pName);
     Py_DECREF(pName);
-
     if (!pModule_global) {
         PyErr_Print();
         fprintf(stderr, "Failed to import codellama_ffi_module\n");
-        // keep going: generate_response will handle null module gracefully
         return;
     }
-
     pFunc_generate = PyObject_GetAttrString(pModule_global, "generate_response");
     if (!pFunc_generate || !PyCallable_Check(pFunc_generate)) {
         PyErr_Print();
         fprintf(stderr, "generate_response not found or not callable\n");
         Py_XDECREF(pFunc_generate);
         pFunc_generate = NULL;
-        // We keep the module loaded even if function lookup failed
     }
+    python_initialized = 1;
 }
 
-// Call once at process shutdown
 void finalize_python_wrapper() {
     if (!python_initialized) return;
-    // DECREF function & module
-    if (pFunc_generate) {
-        Py_XDECREF(pFunc_generate);
-        pFunc_generate = NULL;
-    }
-    if (pModule_global) {
-        Py_XDECREF(pModule_global);
-        pModule_global = NULL;
-    }
+    if (pFunc_generate) { Py_XDECREF(pFunc_generate); pFunc_generate = NULL; }
+    if (pModule_global) { Py_XDECREF(pModule_global); pModule_global = NULL; }
     Py_Finalize();
     python_initialized = 0;
 }
@@ -57,17 +71,17 @@ char* generate_response(const char* brand, const char* prompt) {
     if (!python_initialized) {
         initialize_python_wrapper();
     }
-
     if (!pModule_global || !pFunc_generate) {
         fprintf(stderr, "Python module or function not initialized\n");
         return NULL;
     }
 
-    // Build args tuple
+    // Acquire GIL for this call (safe if caller is multi-threaded)
+    PyGILState_STATE gstate = PyGILState_Ensure();
+
     PyObject *pBrand = PyUnicode_FromString(brand ? brand : "default");
     PyObject *pPrompt = PyUnicode_FromString(prompt ? prompt : "");
     PyObject *pArgs = PyTuple_Pack(2, pBrand, pPrompt);
-
     Py_DECREF(pBrand);
     Py_DECREF(pPrompt);
 
@@ -78,35 +92,23 @@ char* generate_response(const char* brand, const char* prompt) {
     if (pValue) {
         const char* output = PyUnicode_AsUTF8(pValue);
         if (output) {
-            result = strdup(output);
+            result = strdup(output); // caller must call free_c_string
         }
         Py_DECREF(pValue);
     } else {
         PyErr_Print();
     }
 
+    PyGILState_Release(gstate);
     return result;
 }
 
-int main(int argc, char *argv[]) {
-    // Initialize once
-    initialize_python_wrapper();
+// Alias function to satisfy callers expecting 'generate'
+char* generate(const char* brand, const char* prompt) {
+    return generate_response(brand, prompt);
+}
 
-    if (argc < 3) {
-        fprintf(stderr, "Usage: %s <brand> <prompt>\n", argv[0]);
-        finalize_python_wrapper();
-        return 1;
-    }
-
-    char *output = generate_response(argv[1], argv[2]);
-    if (output) {
-        printf("Model output:\n%s\n", output);
-        free(output);
-    } else {
-        fprintf(stderr, "No output from model\n");
-    }
-
-    // Finalize once at exit
-    finalize_python_wrapper();
-    return 0;
+// Free helper for callers (e.g., Dart) to free allocated string
+void free_c_string(char* s) {
+    if (s) free(s);
 }
