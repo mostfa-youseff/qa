@@ -5,7 +5,7 @@ import 'package:qa_module/modules/documentation/adapters/dynamic_documentation_a
 import 'package:qa_module/modules/documentation/services/repo_service.dart';
 import 'package:qa_module/modules/documentation/models/template_config.dart';
 import 'package:qa_module/shared/cache_service.dart';
-
+import 'package:path/path.dart' as p;
 class DocService {
   final ModelService _modelService = ModelService();
   final RepoService _repoService = RepoService();
@@ -144,15 +144,15 @@ ${sections.map((s) => '## $s\n${_defaultSectionContent(s, summary)}').join('\n')
 
   Future<void> _generateSiteConfig(String format) async {
     if (format == 'markdown') {
-      final mkdocsConfig = File('modules/documentation/config/mkdocs.yml');
+      final mkdocsConfig = File('lib/modules/documentation/config/mkdocs.yml');
       final mkdocsDest = File('mkdocs.yml');
       await mkdocsConfig.copy(mkdocsDest.path);
     } else if (format == 'rst') {
-      final hugoConfig = File('modules/documentation/config/config.toml');
+      final hugoConfig = File('lib/modules/documentation/config/config.toml');
       final hugoDest = File('config.toml');
       await hugoConfig.copy(hugoDest.path);
     } else if (format == 'asciidoc') {
-      final asciidocConfig = File('modules/documentation/config/asciidoc.yml');
+      final asciidocConfig = File('lib/modules/documentation/config/asciidoc.yml');
       final asciidocDest = File('asciidoc.yml');
       await asciidocConfig.copy(asciidocDest.path);
     }
