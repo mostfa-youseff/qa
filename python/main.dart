@@ -1,39 +1,39 @@
-import 'dart:ffi' as ffi;
+import 'dart:ffi';
 import 'dart:io';
-
 import 'package:ffi/ffi.dart';
 
-typedef generate_native = ffi.Pointer<Utf8> Function(
-  ffi.Pointer<Utf8>, ffi.Pointer<Utf8>, ffi.Pointer<Utf8>);
-typedef Generate = ffi.Pointer<Utf8> Function(
-  ffi.Pointer<Utf8>, ffi.Pointer<Utf8>, ffi.Pointer<Utf8>);
+// C function signature in the .so file
+typedef GenerateResponseNative = Pointer<Utf8> Function(
+    Pointer<Utf8> prompt, Int32 maxTokens, Float temperature);
+typedef GenerateResponseDart = Pointer<Utf8> Function(
+    Pointer<Utf8> prompt, int maxTokens, double temperature);
 
-typedef free_memory_native = ffi.Void Function(ffi.Pointer<Utf8>);
-typedef FreeMemory = void Function(ffi.Pointer<Utf8>);
+class CodeLlamaFFI {
+  late DynamicLibrary _lib;
+  late GenerateResponseDart _generateResponse;
 
-void main() {
-  // هنا اسم المكتبة المشتركة (shared library)
-  final dylib = ffi.DynamicLibrary.open('./libcodellama.so');
+  CodeLlamaFFI() {
+    final scriptDir = Directory.current.path;
+    _lib = DynamicLibrary.open('$scriptDir/../libffi/libcodellama.so');
 
-  final Generate generate = dylib.lookupFunction<generate_native, Generate>('generate');
-  final FreeMemory freeMemory = dylib.lookupFunction<free_memory_native, FreeMemory>('free_memory');
-
-  final promptPtr = "Write a Dart function".toNativeUtf8();
-  final adapterPtr = "test_gen_adapter".toNativeUtf8();
-  final checkpointPtr = "/mnt/data/codellama_7b_test_adapter/checkpoint-1000".toNativeUtf8();
-
-  final resultPtr = generate(promptPtr, adapterPtr, checkpointPtr);
-
-  if (resultPtr == ffi.nullptr) {
-    print('Error: generate returned nullptr');
-  } else {
-    final result = resultPtr.toDartString();
-    print('Result from C: $result');
-    freeMemory(resultPtr);
+    _generateResponse = _lib
+        .lookup<NativeFunction<GenerateResponseNative>>('generate_response')
+        .asFunction();
   }
 
-  // حرر الميموري المحجوزة
-  calloc.free(promptPtr);
-  calloc.free(adapterPtr);
-  calloc.free(checkpointPtr);
+  String generate(String prompt, {int maxTokens = 256, double temperature = 0.7}) {
+    final promptPtr = prompt.toNativeUtf8();
+    final resultPtr = _generateResponse(promptPtr, maxTokens, temperature);
+    final response = resultPtr.toDartString();
+    calloc.free(promptPtr);
+    return response;
+  }
+}
+
+void main() {
+  final llama = CodeLlamaFFI();
+  final prompt = "Write a Python function to check if a number is prime:";
+  print("🔹 Prompt: $prompt");
+  final response = llama.generate(prompt);
+  print("🔹 Response: $response");
 }

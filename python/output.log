@@ -1,0 +1,2 @@
+nohup: ignoring input
+llama_context: n_ctx_per_seq (512) < n_ctx_train (16384) -- the full capacity of the model will not be utilized

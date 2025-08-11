@@ -1,61 +1,97 @@
-# ملف Python يحتوي دالة generate_text فقط (تستخدم كـ API)
-from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
-from peft import PeftModel
-import torch
+import json
 import os
-import threading
+from abc import ABC, abstractmethod
+from llama_cpp import Llama
 
-base_model_name = "codellama/CodeLlama-7b-hf"
-model = None
-tokenizer = None
-adapter_models = {}
-lock = threading.Lock()
+CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "model_config.json")
 
-bnb_config = BitsAndBytesConfig(
-    load_in_4bit=True,
-    bnb_4bit_use_double_quant=True,
-    bnb_4bit_quant_type="nf4",
-    bnb_4bit_compute_dtype=torch.float16,
-)
+with open(CONFIG_PATH, "r") as f:
+    config = json.load(f)
 
-def initialize_base_model():
-    global model, tokenizer
-    if model is None or tokenizer is None:
-        hf_token = os.getenv("HF_TOKEN")
-        tokenizer = AutoTokenizer.from_pretrained(
-            base_model_name,
-            use_auth_token=hf_token,
-            trust_remote_code=True,
+MODEL_PATH = config.get("gguf_model_path", "").strip()
+if not MODEL_PATH or not os.path.exists(MODEL_PATH):
+    raise FileNotFoundError(f"Model file not found: {MODEL_PATH}")
+
+class CodeLlamaBaseModel:
+    def __init__(self, model_path: str):
+        self.llm = Llama(
+            model_path=model_path,
+            n_gpu_layers=-1,
+            n_threads=8,
+            verbose=False
         )
-        model = AutoModelForCausalLM.from_pretrained(
-            base_model_name,
-            use_auth_token=hf_token,
-            trust_remote_code=True,
-            device_map="auto",
-            quantization_config=bnb_config,
+
+    def predict(self, prompt: str, max_tokens: int = 256, temperature: float = 0.7) -> str:
+        output = self.llm(
+            prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            stop=["</s>", "###"]
         )
-        model.eval()
+        return output["choices"][0]["text"].strip()
 
-def get_adapter_model(checkpoint_path):
-    with lock:
-        if checkpoint_path not in adapter_models:
-            adapter_models[checkpoint_path] = PeftModel.from_pretrained(
-                model,
-                checkpoint_path,
-                is_trainable=False,
-                device_map="auto",
-                quantization_config=bnb_config,
-            )
-            adapter_models[checkpoint_path].eval()
-        return adapter_models[checkpoint_path]
+class CodeLlamaAdapter(ABC):
+    def __init__(self, base_model: CodeLlamaBaseModel):
+        self.base_model = base_model
 
-def generate_text(prompt: str, adapter_id: str, checkpoint_path: str) -> str:
-    try:
-        initialize_base_model()
-        adapter_model = get_adapter_model(checkpoint_path)
-        inputs = tokenizer(prompt, return_tensors="pt").to(next(adapter_model.parameters()).device)
-        outputs = adapter_model.generate(**inputs, max_length=512)
-        result_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
-        return result_text
-    except Exception as e:
-        return f"Error: {str(e)}"
+    @abstractmethod
+    def prepare(self, prompt: str) -> str:
+        pass
+
+    def infer(self, prompt: str, **kwargs) -> str:
+        return self.base_model.predict(prompt, **kwargs)
+
+    @abstractmethod
+    def post_process(self, output: str) -> str:
+        pass
+
+class DefaultAdapter(CodeLlamaAdapter):
+    def prepare(self, prompt: str) -> str:
+        return prompt
+
+    def post_process(self, output: str) -> str:
+        return output
+
+class DocumentationAdapter(CodeLlamaAdapter):
+    def prepare(self, prompt: str) -> str:
+        return f"[Documentation] {prompt}"
+
+    def post_process(self, output: str) -> str:
+        return output.strip()
+
+class TestGenerationAdapter(CodeLlamaAdapter):
+    def prepare(self, prompt: str) -> str:
+        return f"[TestGen] {prompt}"
+
+    def post_process(self, output: str) -> str:
+        return output.strip()
+
+class AdapterFactory:
+    @staticmethod
+    def load(brand: str, base_model: CodeLlamaBaseModel) -> CodeLlamaAdapter:
+        mapping = {
+            "documentation": DocumentationAdapter,
+            "test_generation": TestGenerationAdapter,
+            "default": DefaultAdapter
+        }
+        adapter_cls = mapping.get(brand.lower(), DefaultAdapter)
+        return adapter_cls(base_model)
+
+class CodeLlamaClient:
+    def __init__(self, model_path: str, brand: str = "default"):
+        base_model = CodeLlamaBaseModel(model_path)
+        self.adapter = AdapterFactory.load(brand, base_model)
+
+    def run(self, prompt: str, **kwargs) -> str:
+        prepped = self.adapter.prepare(prompt)
+        raw_output = self.adapter.infer(prepped, **kwargs)
+        return self.adapter.post_process(raw_output)
+
+def generate_response(brand: str, prompt: str, max_tokens: int = 256, temperature: float = 0.7) -> str:
+    client = CodeLlamaClient(model_path=MODEL_PATH, brand=brand)
+    return client.run(prompt, max_tokens=max_tokens, temperature=temperature)
+
+if __name__ == "__main__":
+    brand = os.getenv("BRAND", "default")
+    prompt = "Write a Python function to check if a number is prime:"
+    print(generate_response(brand, prompt))

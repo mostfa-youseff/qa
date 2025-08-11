@@ -1,80 +1,61 @@
-
 #include <Python.h>
-#include <stdlib.h>
-#include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 
-static PyObject *pModule = NULL;
-static PyObject *pFuncGenerate = NULL;
+char* generate_response(const char* brand, const char* prompt) {
+    Py_Initialize();
 
-int initialize_python() {
-    setenv("PYTHONPATH", "/home/myouseff_aortem_io/qa/python", 1); // ضبط PYTHONPATH
-    if (!Py_IsInitialized()) {
-        Py_Initialize();
-    }
-    printf("Python version: %s\n", Py_GetVersion());
-    pModule = PyImport_ImportModule("codellama_ffi_module");
+    PyObject *pName = PyUnicode_DecodeFSDefault("codellama_ffi_module");
+    PyObject *pModule = PyImport_Import(pName);
+    Py_DECREF(pName);
+
     if (!pModule) {
-        fprintf(stderr, "Error: Failed to load codellama_ffi_module\n");
         PyErr_Print();
-        return -1;
-    }
-    printf("Successfully loaded codellama_ffi_module\n");
-    pFuncGenerate = PyObject_GetAttrString(pModule, "generate_text");
-    if (!pFuncGenerate || !PyCallable_Check(pFuncGenerate)) {
-        fprintf(stderr, "Error: Failed to load generate_text function\n");
-        PyErr_Print();
-        Py_XDECREF(pModule);
-        return -2;
-    }
-    printf("Successfully loaded generate_text function\n");
-    return 0;
-}
-
-char* generate(const char* prompt, const char* adapter_id, const char* checkpoint_path) {
-    if (!pFuncGenerate) {
-        fprintf(stderr, "Error: pFuncGenerate is NULL\n");
+        Py_Finalize();
         return NULL;
     }
-    PyObject *pArgs = PyTuple_New(3);
-    if (!pArgs) {
-        fprintf(stderr, "Error: Failed to create PyTuple\n");
+
+    PyObject *pFunc = PyObject_GetAttrString(pModule, "generate_response");
+    if (!pFunc || !PyCallable_Check(pFunc)) {
+        PyErr_Print();
+        Py_XDECREF(pFunc);
+        Py_DECREF(pModule);
+        Py_Finalize();
         return NULL;
     }
-    PyTuple_SetItem(pArgs, 0, PyUnicode_FromString(prompt));
-    PyTuple_SetItem(pArgs, 1, PyUnicode_FromString(adapter_id));
-    PyTuple_SetItem(pArgs, 2, PyUnicode_FromString(checkpoint_path));
 
-    PyObject *pValue = PyObject_CallObject(pFuncGenerate, pArgs);
+    PyObject *pArgs = PyTuple_Pack(2, PyUnicode_FromString(brand), PyUnicode_FromString(prompt));
+    PyObject *pValue = PyObject_CallObject(pFunc, pArgs);
     Py_DECREF(pArgs);
 
-    if (!pValue) {
-        fprintf(stderr, "Error: PyObject_CallObject failed\n");
-        PyErr_Print();
-        return NULL;
-    }
-
-    const char* result_cstr = PyUnicode_AsUTF8(pValue);
-    if (!result_cstr) {
-        fprintf(stderr, "Error: PyUnicode_AsUTF8 failed\n");
-        PyErr_Print();
+    char* result = NULL;
+    if (pValue) {
+        const char* output = PyUnicode_AsUTF8(pValue);
+        if (output) {
+            result = strdup(output);
+        }
         Py_DECREF(pValue);
-        return NULL;
+    } else {
+        PyErr_Print();
     }
 
-    char* ret = strdup(result_cstr);
-    Py_DECREF(pValue);
-    return ret;
+    Py_XDECREF(pFunc);
+    Py_DECREF(pModule);
+    Py_Finalize();
+
+    return result;
 }
 
-void free_memory(char* ptr) {
-    free(ptr);
-}
-
-void finalize_python() {
-    Py_XDECREF(pFuncGenerate);
-    Py_XDECREF(pModule);
-    if (Py_IsInitialized()) {
-        Py_Finalize();
+int main(int argc, char *argv[]) {
+    if (argc < 3) {
+        fprintf(stderr, "Usage: %s <brand> <prompt>\n", argv[0]);
+        return 1;
     }
+
+    char *output = generate_response(argv[1], argv[2]);
+    if (output) {
+        printf("Model output:\n%s\n", output);
+        free(output);
+    }
+    return 0;
 }
