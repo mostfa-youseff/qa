@@ -1,7 +1,9 @@
+# codellama_ffi_module.py
 import json
 import os
 from abc import ABC, abstractmethod
 from llama_cpp import Llama
+import threading
 
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "model_config.json")
 
@@ -12,8 +14,42 @@ MODEL_PATH = config.get("gguf_model_path", "").strip()
 if not MODEL_PATH or not os.path.exists(MODEL_PATH):
     raise FileNotFoundError(f"Model file not found: {MODEL_PATH}")
 
+# --- Global model + lock to keep it loaded once ---
+_global_base_model = None
+_global_lock = threading.Lock()
+_initialized = False
+
+def initialize_model():
+    """Call once to initialize/load the model into GPU memory."""
+    global _global_base_model, _initialized
+    with _global_lock:
+        if _initialized:
+            return
+        _global_base_model = CodeLlamaBaseModel(MODEL_PATH)
+        _initialized = True
+
+def finalize_model():
+    """Call once at shutdown to free resources if needed."""
+    global _global_base_model, _initialized
+    with _global_lock:
+        if not _initialized:
+            return
+        # If llama_cpp provides an explicit close/free API, call it here.
+        # Example: _global_base_model.llm.free()  -- replace with real API if exists.
+        _global_base_model = None
+        _initialized = False
+
+def get_base_model():
+    global _global_base_model
+    if not _initialized:
+        # Lazy init fallback (keeps compatibility if caller didn't call initialize_model)
+        initialize_model()
+    return _global_base_model
+
+# --- Existing classes (unchanged apart from usage of get_base_model) ---
 class CodeLlamaBaseModel:
     def __init__(self, model_path: str):
+        # Note: tune n_gpu_layers/n_threads according to your environment
         self.llm = Llama(
             model_path=model_path,
             n_gpu_layers=-1,
@@ -78,8 +114,8 @@ class AdapterFactory:
         return adapter_cls(base_model)
 
 class CodeLlamaClient:
-    def __init__(self, model_path: str, brand: str = "default"):
-        base_model = CodeLlamaBaseModel(model_path)
+    def __init__(self, brand: str = "default"):
+        base_model = get_base_model()
         self.adapter = AdapterFactory.load(brand, base_model)
 
     def run(self, prompt: str, **kwargs) -> str:
@@ -87,11 +123,19 @@ class CodeLlamaClient:
         raw_output = self.adapter.infer(prepped, **kwargs)
         return self.adapter.post_process(raw_output)
 
+# Backwards-compatible entrypoint used by C wrapper:
 def generate_response(brand: str, prompt: str, max_tokens: int = 256, temperature: float = 0.7) -> str:
-    client = CodeLlamaClient(model_path=MODEL_PATH, brand=brand)
+    """
+    This function assumes initialize_model() has been called already (recommended).
+    If not, it will lazily initialize the model.
+    """
+    client = CodeLlamaClient(brand=brand)
     return client.run(prompt, max_tokens=max_tokens, temperature=temperature)
 
+# Optional: quick test when running python file directly
 if __name__ == "__main__":
+    initialize_model()
     brand = os.getenv("BRAND", "default")
     prompt = "Write a Python function to check if a number is prime:"
     print(generate_response(brand, prompt))
+    # finalize_model()  # only if you want to free before exit
