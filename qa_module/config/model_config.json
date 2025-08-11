@@ -1,7 +1,0 @@
-{
-  "model_path": "/mnt/data/codellama_7b_finetuned/checkpoint-700",
-  "adapters": {
-    "documentation": "dynamic_documentation_adapter",
-    "test_generation": "test_gen_adapter"
-  }
-}
