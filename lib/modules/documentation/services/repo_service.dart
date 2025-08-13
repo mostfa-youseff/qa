@@ -1,88 +1,92 @@
-import 'package:qa_module/shared/git_service.dart';
 import 'dart:io';
-import 'package:yaml/yaml.dart';
 import 'package:qa_module/modules/documentation/models/repo_summary.dart';
+import 'package:qa_module/shared/git_service.dart';
 
 class RepoService {
   final GitService _gitService = GitService();
 
   Future<RepoSummary> analyzeRepo(String repoUrl, {String? token}) async {
-    // تحقق صلاحية الوصول أولًا
-    await _gitService.checkRepoAccess(repoUrl, token: token);
-
-    final repoPath = await _gitService.cloneRepo(repoUrl, token: token);
-
-    // ابحث عن ملف pubspec.yaml في الجذر أو مجلد فرعي (عمق 1)
-    final pubspecPath = await _findPubspecYamlPath(repoPath);
-
-    Map<String, dynamic> pubspecInfo = {
-      'name': 'Unknown',
-      'description': 'No description',
-      'version': 'Unknown',
-      'dependencies': <String>[],
-    };
-
-    if (pubspecPath != null) {
-      pubspecInfo = await _parsePubspec(pubspecPath);
+    String repoPath;
+    if (repoUrl.isNotEmpty) {
+      bool isPublic = await _gitService.isPublicRepo(repoUrl);
+      if (!isPublic && token == null) {
+        throw Exception('Private repository requires a valid access token.');
+      }
+      repoPath = await _gitService.cloneRepo(repoUrl, token: token);
     } else {
-      print('Warning: pubspec.yaml not found. Proceeding without it.');
+      throw Exception('Repository URL cannot be empty.');
     }
 
-    final summary = RepoSummary(
-      name: pubspecInfo['name'] ?? 'Unknown',
-      description: pubspecInfo['description'] ?? 'No description',
-      version: pubspecInfo['version'] ?? 'Unknown',
-      dependencies: pubspecInfo['dependencies'] != null
-          ? List<String>.from(pubspecInfo['dependencies'])
-          : [],
-      comments: [], // رجع قايمة فارغة بدل تحليل التعليقات
-    );
-
-    await Directory(repoPath).delete(recursive: true);
-
-    return summary;
+    try {
+      final repoDir = Directory(repoPath);
+      final summary = RepoSummary(
+        name: repoUrl.split('/').last.replaceAll('.git', ''),
+        description: await _getDescription(repoPath),
+        dependencies: await _getDependencies(repoPath),
+        structure: await _getStructure(repoPath),
+      );
+      return summary;
+    } finally {
+      await Directory(repoPath).delete(recursive: true);
+    }
   }
 
-  Future<String?> _findPubspecYamlPath(String repoPath) async {
-    final rootPubspec = File('$repoPath/pubspec.yaml');
-    if (await rootPubspec.exists()) {
-      return rootPubspec.path;
+  Future<String> _getDescription(String repoPath) async {
+    final readmeFiles = [
+      'README.md',
+      'README.rst',
+      'README.adoc',
+      'readme.md',
+    ];
+    for (final fileName in readmeFiles) {
+      final file = File('$repoPath/$fileName');
+      if (await file.exists()) {
+        return await file.readAsString();
+      }
     }
+    return 'No description found.';
+  }
 
+  Future<List<String>> _getDependencies(String repoPath) async {
+    final pubspec = File('$repoPath/pubspec.yaml');
+    if (!await pubspec.exists()) return [];
+    final content = await pubspec.readAsString();
+    final dependencies = <String>[];
+    final lines = content.split('\n');
+    bool inDependencies = false;
+    for (final line in lines) {
+      if (line.trim().startsWith('dependencies:')) {
+        inDependencies = true;
+        continue;
+      }
+      if (inDependencies && line.trim().startsWith('-')) break;
+      if (inDependencies && line.trim().isNotEmpty && !line.trim().startsWith('#')) {
+        final dep = line.trim().split(':').first.trim();
+        if (dep.isNotEmpty) dependencies.add(dep);
+      }
+    }
+    return dependencies;
+  }
+
+  Future<Map<String, List<String>>> _getStructure(String repoPath) async {
     final dir = Directory(repoPath);
-    await for (final entity in dir.list(followLinks: false)) {
-      if (entity is Directory) {
-        final possiblePath = '${entity.path}/pubspec.yaml';
-        final file = File(possiblePath);
-        if (await file.exists()) {
-          return possiblePath;
+    final structure = <String, List<String>>{
+      'lib': [],
+      'test': [],
+      'example': [],
+    };
+    await for (final entity in dir.list(recursive: true)) {
+      if (entity is File) {
+        final relativePath = entity.path.replaceFirst('$repoPath/', '');
+        if (relativePath.startsWith('lib/')) {
+          structure['lib']!.add(relativePath);
+        } else if (relativePath.startsWith('test/')) {
+          structure['test']!.add(relativePath);
+        } else if (relativePath.startsWith('example/')) {
+          structure['example']!.add(relativePath);
         }
       }
     }
-    return null; // لم يتم العثور
-  }
-
-  Future<Map<String, dynamic>> _parsePubspec(String pubspecPath) async {
-    final file = File(pubspecPath);
-    try {
-      final content = await file.readAsString();
-      final yaml = loadYaml(content);
-      return {
-        'name': yaml['name']?.toString() ?? 'Unknown',
-        'description': yaml['description']?.toString() ?? 'No description',
-        'version': yaml['version']?.toString() ?? 'Unknown',
-        'dependencies': yaml['dependencies'] != null
-            ? (yaml['dependencies'] as YamlMap).keys.toList().cast<String>()
-            : [],
-      };
-    } catch (e) {
-      print('Warning: Failed to parse pubspec.yaml: $e');
-      return {
-        'name': 'Unknown',
-        'description': 'Failed to parse pubspec.yaml',
-        'version': 'Unknown',
-        'dependencies': [],
-      };
-    }
+    return structure;
   }
 }

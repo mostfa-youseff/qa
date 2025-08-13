@@ -6,19 +6,33 @@ import 'package:path/path.dart' as path;
 
 class ModelService {
   late final String _baseModel;
+  late final String _modelPath;
   late final String _adapterCheckpoint;
   late final String _ffiLibraryPath;
   late final DynamicLibrary _dylib;
-  late final Pointer<Utf8> Function(
-      Pointer<Utf8> prompt,
-      Pointer<Utf8> adapterId,
-      Pointer<Utf8> checkpointPath) _generate;
+
+  // FFI function bindings
+  late final Pointer<Utf8> Function() _lastError;
+  late final Pointer<Void> Function(Pointer<Utf8>, int) _loadModel;
+  late final int Function(Pointer<Void>) _unloadModel;
+  late final int Function(Pointer<Void>, Pointer<Utf8>) _applyAdapter;
+  late final int Function(
+    Pointer<Void>,
+    Pointer<Utf8>,
+    Pointer<Utf8>,
+    int,
+    int,
+    double,
+    double,
+    int
+  ) _generate;
 
   ModelService({String configPath = 'config/model_config.json'}) {
     final config = _readConfig(configPath);
     _baseModel = config['base_model'] as String;
-    _adapterCheckpoint = config['adapter_checkpoint'] as String;
-    _ffiLibraryPath = config['ffi_library_path'] as String;
+    _modelPath = path.absolute(config['model_path'] as String); // Convert to absolute path
+    _adapterCheckpoint = path.absolute(config['adapter_checkpoint'] as String); // Convert to absolute path
+    _ffiLibraryPath = path.absolute(config['ffi_library_path'] as String); // Convert to absolute path
 
     _initializeFFI();
     _validateCheckpoint();
@@ -29,39 +43,72 @@ class ModelService {
     if (!file.existsSync()) {
       throw Exception('Config file not found at $path');
     }
-    final content = file.readAsStringSync();
-    return jsonDecode(content);
+    return jsonDecode(file.readAsStringSync()) as Map<String, dynamic>;
   }
 
   void _initializeFFI() {
     try {
-      final absolutePath = path.absolute(_ffiLibraryPath);
-      _dylib = DynamicLibrary.open(absolutePath);
+      _dylib = DynamicLibrary.open(_ffiLibraryPath);
+
+      _lastError = _dylib.lookupFunction<
+          Pointer<Utf8> Function(),
+          Pointer<Utf8> Function()
+      >('llama_last_error');
+
+      _loadModel = _dylib.lookupFunction<
+          Pointer<Void> Function(Pointer<Utf8>, Int32),
+          Pointer<Void> Function(Pointer<Utf8>, int)
+      >('llama_load_model');
+
+      _unloadModel = _dylib.lookupFunction<
+          Int32 Function(Pointer<Void>),
+          int Function(Pointer<Void>)
+      >('llama_unload_model');
+
+      _applyAdapter = _dylib.lookupFunction<
+          Int32 Function(Pointer<Void>, Pointer<Utf8>),
+          int Function(Pointer<Void>, Pointer<Utf8>)
+      >('llama_apply_adapter');
+
       _generate = _dylib.lookupFunction<
-          Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>),
-          Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>)
-      >('generate');
+          Int32 Function(
+            Pointer<Void>,
+            Pointer<Utf8>,
+            Pointer<Utf8>,
+            Int32,
+            Int32,
+            Float,
+            Float,
+            Int32
+          ),
+          int Function(
+            Pointer<Void>,
+            Pointer<Utf8>,
+            Pointer<Utf8>,
+            int,
+            int,
+            double,
+            double,
+            int
+          )
+      >('llama_generate');
     } catch (e) {
-      throw Exception('Failed to load FFI library: $e');
+      throw Exception('Failed to initialize FFI: $e');
     }
   }
 
   void _validateCheckpoint() {
-    final checkpointDir = Directory(_adapterCheckpoint);
-    if (!checkpointDir.existsSync()) {
-      throw Exception('Adapter checkpoint not found at $_adapterCheckpoint');
+    final modelFile = File(_modelPath);
+    if (!modelFile.existsSync()) {
+      throw Exception('Model file not found at $_modelPath');
     }
-    final requiredFiles = ['adapter_config.json'];
-    for (final file in requiredFiles) {
-      if (!File('${_adapterCheckpoint}/$file').existsSync()) {
-        throw Exception('Missing required checkpoint file: $file');
-      }
+    final adapterDir = Directory(_adapterCheckpoint);
+    if (!adapterDir.existsSync()) {
+      throw Exception('Adapter checkpoint directory not found at $_adapterCheckpoint');
     }
-    // Check for either adapter_model.bin or adapter_model.safetensors
-    final modelFileBin = File('${_adapterCheckpoint}/adapter_model.bin');
-    final modelFileSafetensors = File('${_adapterCheckpoint}/adapter_model.safetensors');
-    if (!modelFileBin.existsSync() && !modelFileSafetensors.existsSync()) {
-      throw Exception('Missing adapter model file: adapter_model.bin or adapter_model.safetensors');
+    final ffiLib = File(_ffiLibraryPath);
+    if (!ffiLib.existsSync()) {
+      throw Exception('FFI library not found at $_ffiLibraryPath');
     }
   }
 
@@ -69,25 +116,57 @@ class ModelService {
     required String prompt,
     required String adapterId,
   }) async {
+    final modelPathPtr = _modelPath.toNativeUtf8();
+    final handle = _loadModel(modelPathPtr, 0); // Assuming no GPU layers
+    if (handle.address == 0) {
+      final error = _lastError().toDartString();
+      malloc.free(modelPathPtr);
+      throw Exception('Failed to load model: $error');
+    }
+
+    final adapterPathPtr = _adapterCheckpoint.toNativeUtf8();
+    final adapterResult = _applyAdapter(handle, adapterPathPtr);
+    if (adapterResult != 0) {
+      final error = _lastError().toDartString();
+      malloc.free(adapterPathPtr);
+      malloc.free(modelPathPtr);
+      _unloadModel(handle);
+      throw Exception('Failed to apply adapter: $error');
+    }
+
     final promptPtr = prompt.toNativeUtf8();
-    final adapterIdPtr = adapterId.toNativeUtf8();
-    final checkpointPtr = _adapterCheckpoint.toNativeUtf8();
+    final outbuf = malloc.allocate<Uint8>(1024 * 1024); // 1MB buffer
+    final outbufSize = 1024 * 1024;
+    final maxTokens = 512;
+    final temperature = 0.7;
+    final topP = 0.9;
+    final topK = 40;
+
     try {
-      final resultPtr = _generate(promptPtr, adapterIdPtr, checkpointPtr);
-      if (resultPtr.address == 0) {
-        throw Exception('Model inference failed: null pointer returned');
+      final result = _generate(
+        handle,
+        promptPtr,
+        outbuf.cast(),
+        outbufSize,
+        maxTokens,
+        temperature,
+        topP,
+        topK,
+      );
+
+      if (result < 0) {
+        final error = _lastError().toDartString();
+        throw Exception('Generation failed: $error');
       }
-      final result = resultPtr.toDartString();
-      _freeMemory(resultPtr);
-      return result;
+
+      final output = outbuf.cast<Utf8>().toDartString();
+      return output.substring(0, result);
     } finally {
       malloc.free(promptPtr);
-      malloc.free(adapterIdPtr);
-      malloc.free(checkpointPtr);
+      malloc.free(outbuf);
+      malloc.free(adapterPathPtr);
+      malloc.free(modelPathPtr);
+      _unloadModel(handle);
     }
-  }
-
-  void _freeMemory(Pointer<Utf8> ptr) {
-    _dylib.lookupFunction<Void Function(Pointer<Utf8>), void Function(Pointer<Utf8>)>('free_memory')(ptr);
   }
 }

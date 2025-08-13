@@ -21,7 +21,6 @@ class TestGenService {
     final testConfig = TestConfig(framework: 'test', type: testType);
     final adapter = TestGenAdapter();
 
-
     if ((filePath == null && repoUrl == null) || (filePath != null && repoUrl != null)) {
       throw Exception('Please provide either a filePath or a repoUrl, but not both or neither.');
     }
@@ -29,49 +28,48 @@ class TestGenService {
     List<String> dartFiles = [];
     String? repoPath;
 
-    if (repoUrl != null) {
-    
-      repoPath = await gitService.cloneRepo(repoUrl, token: token);
-      dartFiles = await gitService.getDartFiles(repoPath);
+    try {
+      if (repoUrl != null) {
+        repoPath = await gitService.cloneRepo(repoUrl, token: token);
+        dartFiles = await gitService.getDartFiles(repoPath);
 
-      if (dartFiles.isEmpty) {
+        if (dartFiles.isEmpty) {
+          throw Exception('No Dart files found in repository.');
+        }
+      } else if (filePath != null) {
+        dartFiles = [filePath];
+      }
+
+      await Future.wait(dartFiles.map((file) async {
+        final cacheKey = 'test:$file:$testType';
+        final cachedTests = await _cacheService.get(cacheKey);
+        if (cachedTests != null) {
+          await _writeTests(cachedTests, file);
+          return;
+        }
+
+        final code = await _codeService.analyzeCode(file);
+        final prompt = adapter.buildPrompt(
+          code: code,
+          testConfig: testConfig.toJson(),
+        );
+
+        final tests = await _modelService.generate(
+          prompt: prompt,
+          adapterId: TestGenAdapter.adapterId,
+        );
+
+        if (!adapter.validateOutput(tests)) {
+          throw Exception('Generated tests are not valid Dart code for $file.');
+        }
+
+        await _cacheService.set(cacheKey, tests);
+        await _writeTests(tests, file);
+      }));
+    } finally {
+      if (repoPath != null) {
         await Directory(repoPath).delete(recursive: true);
-        throw Exception('No Dart files found in repository.');
       }
-    } else if (filePath != null) {
-      dartFiles = [filePath];
-    }
-
-    for (final file in dartFiles) {
-      final cacheKey = 'test:$file:$testType';
-      final cachedTests = await _cacheService.get(cacheKey);
-      if (cachedTests != null) {
-        await _writeTests(cachedTests, file);
-        continue;
-      }
-
-      final code = await _codeService.analyzeCode(file);
-      final prompt = adapter.buildPrompt(
-        code: code,
-        testConfig: testConfig.toJson(),
-      );
-
-      final tests = await _modelService.generate(
-        prompt: prompt,
-        adapterId: TestGenAdapter.adapterId, // Uses test_gen_adapter
-      );
-
-      if (!adapter.validateOutput(tests)) {
-        throw Exception('Generated tests are not valid Dart code.');
-      }
-
-      await _cacheService.set(cacheKey, tests);
-      await _writeTests(tests, file);
-    }
-
-  
-    if (repoPath != null) {
-      await Directory(repoPath).delete(recursive: true);
     }
   }
 
@@ -81,4 +79,3 @@ class TestGenService {
     await file.writeAsString(tests);
   }
 }
-

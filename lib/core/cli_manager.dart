@@ -22,42 +22,9 @@ class CliManager {
       if (module == 'documentation') {
         repoUrl = await _promptRepoUrl();
         if (repoUrl.isNotEmpty) {
-          // Try accessing repo without token first
-          try {
-            final accessStatus = await _gitService.checkRepoAccess(repoUrl, token: token);
-            if (accessStatus['isPrivate']) {
-              token = await _promptToken();
-              // Validate token
-              if (token.isNotEmpty) {
-                final isTokenValid = await _gitService.validateToken(token);
-                if (!isTokenValid) {
-                  throw Exception('Invalid access token provided.');
-                }
-              } else {
-                throw Exception('Repository is private. Access token required.');
-              }
-            }
-          } catch (e) {
-            if (e.toString().contains('Repository not found') || e.toString().contains('Access denied')) {
-              // Prompt for token and retry
-              print('Could not access repository. It might be private.');
-              token = await _promptToken();
-              if (token.isNotEmpty) {
-                final isTokenValid = await _gitService.validateToken(token);
-                if (!isTokenValid) {
-                  throw Exception('Invalid access token provided.');
-                }
-                // Retry with token
-                final accessStatus = await _gitService.checkRepoAccess(repoUrl, token: token);
-                if (!accessStatus['isAccessible']) {
-                  throw Exception('Repository is still inaccessible even with token.');
-                }
-              } else {
-                throw Exception('Repository is private. Access token required.');
-              }
-            } else {
-              throw e; // Rethrow other errors
-            }
+          bool isPublic = await _gitService.isPublicRepo(repoUrl);
+          if (!isPublic) {
+            token = await _promptToken();
           }
         }
         docFormat = await _promptDocFormat();
@@ -65,42 +32,9 @@ class CliManager {
       } else if (module == 'test-generation') {
         repoUrl = await _promptRepoUrl();
         if (repoUrl.isNotEmpty) {
-          // Try accessing repo without token first
-          try {
-            final accessStatus = await _gitService.checkRepoAccess(repoUrl, token: token);
-            if (accessStatus['isPrivate']) {
-              token = await _promptToken();
-              // Validate token
-              if (token.isNotEmpty) {
-                final isTokenValid = await _gitService.validateToken(token);
-                if (!isTokenValid) {
-                  throw Exception('Invalid access token provided.');
-                }
-              } else {
-                throw Exception('Repository is private. Access token required.');
-              }
-            }
-          } catch (e) {
-            if (e.toString().contains('Repository not found') || e.toString().contains('Access denied')) {
-              // Prompt for token and retry
-              print('Could not access repository. It might be private.');
-              token = await _promptToken();
-              if (token.isNotEmpty) {
-                final isTokenValid = await _gitService.validateToken(token);
-                if (!isTokenValid) {
-                  throw Exception('Invalid access token provided.');
-                }
-                // Retry with token
-                final accessStatus = await _gitService.checkRepoAccess(repoUrl, token: token);
-                if (!accessStatus['isAccessible']) {
-                  throw Exception('Repository is still inaccessible even with token.');
-                }
-              } else {
-                throw Exception('Repository is private. Access token required.');
-              }
-            } else {
-              throw e; // Rethrow other errors
-            }
+          bool isPublic = await _gitService.isPublicRepo(repoUrl);
+          if (!isPublic) {
+            token = await _promptToken();
           }
         } else {
           filePath = await _promptFilePath();
@@ -121,7 +55,6 @@ class CliManager {
           repoUrl: repoUrl,
           format: docFormat,
           outputType: docOutputType,
-          token: token,
         );
         print('Documentation generated successfully.');
         break;
@@ -151,39 +84,49 @@ class CliManager {
     print('1) Documentation');
     print('2) Test Generation');
     final input = stdin.readLineSync();
+    if (input != '1' && input != '2') throw Exception('Invalid module');
     return input == '1' ? 'documentation' : 'test-generation';
   }
 
   Future<String> _promptRepoUrl() async {
-    print('Enter repository URL (leave empty for local file):');
-    return stdin.readLineSync() ?? '';
-  }
-
-  Future<String> _promptFilePath() async {
-    print('Enter file path:');
+    print('Enter repository URL (or press Enter for file-based mode):');
     return stdin.readLineSync() ?? '';
   }
 
   Future<String> _promptToken() async {
-    print('Repository is private. Enter Git access token:');
+    print('Enter Git access token for private repository:');
+    return stdin.readLineSync() ?? '';
+  }
+
+  Future<String> _promptFilePath() async {
+    print('Enter file path for test generation:');
     return stdin.readLineSync() ?? '';
   }
 
   Future<String> _promptDocFormat() async {
     print('Choose documentation format (markdown/rst/asciidoc):');
-    final input = stdin.readLineSync()?.toLowerCase();
-    return ['rst', 'asciidoc'].contains(input) ? input! : 'markdown';
+    final input = stdin.readLineSync() ?? 'markdown';
+    if (!['markdown', 'rst', 'asciidoc'].contains(input)) {
+      throw Exception('Invalid format');
+    }
+    return input;
   }
 
   Future<String> _promptDocOutputType() async {
-    print('Choose output type (readme/wiki/both):');
-    final input = stdin.readLineSync()?.toLowerCase();
-    return ['readme', 'wiki', 'both'].contains(input) ? input! : 'readme';
+    print('Choose documentation output type (readme/wiki/both):');
+    final input = stdin.readLineSync() ?? 'readme';
+    if (!['readme', 'wiki', 'both'].contains(input)) {
+      throw Exception('Invalid output type');
+    }
+    return input;
   }
 
   Future<String> _promptTestType() async {
     print('Choose test type (unit/integration/widget):');
-    final input = stdin.readLineSync()?.toLowerCase();
-    return ['unit', 'integration', 'widget'].contains(input) ? input! : 'unit';
+    final input = stdin.readLineSync() ?? 'unit';
+    if (!['unit', 'integration', 'widget'].contains(input)) {
+      throw Exception('Invalid test type');
+    }
+    return input;
   }
 }

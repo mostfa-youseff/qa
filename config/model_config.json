@@ -1,10 +1,10 @@
 {
   "base_model": "CodeLLaMA-7B",
-  "adapter_checkpoint": "/mnt/data/codellama_7b_test_adapter/checkpoint-1000",
-  "ffi_library_path": "libffi/libcodellama.so",
+  "model_path": "/mnt/data/dart-code-ai/modele/codellama-7b.Q4_K_M.gguf",
+  "adapter_checkpoint": "/mnt/data/dart-code-ai/qa-adapter",
+  "ffi_library_path": "libffi/libllama_capi.so",
   "adapters": {
     "documentation": "dynamic_documentation_adapter",
     "test_generation": "test_gen_adapter"
-  },
-  "gguf_model_path": "/mnt/data/codellamagguf/codellama-7b-instruct.Q4_K_M.gguf"
+  }
 }

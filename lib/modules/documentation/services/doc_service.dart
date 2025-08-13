@@ -5,18 +5,16 @@ import 'package:qa_module/modules/documentation/adapters/dynamic_documentation_a
 import 'package:qa_module/modules/documentation/services/repo_service.dart';
 import 'package:qa_module/modules/documentation/models/template_config.dart';
 import 'package:qa_module/shared/cache_service.dart';
-import 'package:path/path.dart' as p;
+
 class DocService {
   final ModelService _modelService = ModelService();
   final RepoService _repoService = RepoService();
   final CacheService _cacheService = CacheService();
 
-  /// توليد الوثائق مع دعم تمرير التوكن
   Future<void> generateDocs({
     required String repoUrl,
     required String format,
-    required String outputType, // 'readme', 'wiki' أو 'both'
-    String? token, // التوكن لازم يمرر هنا
+    required String outputType,
   }) async {
     final cacheKey = 'doc:$repoUrl:$format:$outputType';
     final cachedDocs = await _cacheService.get(cacheKey);
@@ -26,9 +24,7 @@ class DocService {
       return;
     }
 
-    // تمرير التوكن لتحليل الريبو
-    final repoSummary = await _repoService.analyzeRepo(repoUrl, token: token);
-
+    final repoSummary = await _repoService.analyzeRepo(repoUrl);
     final templateConfig = TemplateConfig.load(format: format);
     final adapter = DynamicDocumentationAdapter();
     final prompt = adapter.buildPrompt(
@@ -47,6 +43,7 @@ class DocService {
       if (!_validateDocs(docs, format)) {
         throw Exception('Invalid documentation format');
       }
+      docs = docs.replaceAll('<script>', '');
     } catch (e) {
       print('Model failed, using fallback template: $e');
       docs = _fallbackTemplate(repoSummary, templateConfig, format, outputType);
@@ -71,19 +68,21 @@ class DocService {
 
   String _fallbackTemplate(RepoSummary summary, TemplateConfig config, String format, String outputType) {
     final sections = config.sections;
-    String template;
-    if (format == 'asciidoc') {
-      template = '''
-= ${summary.name}
+    final templateFormat = format == 'rst' ? 'rst' : format == 'asciidoc' ? 'asciidoc' : 'markdown';
+    final projectName = summary.name;
+
+    if (templateFormat == 'asciidoc') {
+      return '''
+= $projectName
 ${sections.map((s) => '''
 == $s
 ${_defaultSectionContent(s, summary)}
 ''').join('\n')}
 ''';
-    } else if (format == 'rst') {
-      template = '''
-${summary.name}
-${'=' * summary.name.length}
+    } else if (templateFormat == 'rst') {
+      return '''
+$projectName
+${'=' * projectName.length}
 
 ${sections.map((s) => '''
 $s
@@ -92,53 +91,47 @@ ${_defaultSectionContent(s, summary)}
 ''').join('\n')}
 ''';
     } else {
-      template = '''
-# ${summary.name}
+      return '''
+# $projectName
 ${sections.map((s) => '## $s\n${_defaultSectionContent(s, summary)}').join('\n')}
 ''';
     }
-    return outputType == 'wiki' ? _convertToWikiFormat(template, format) : template;
   }
 
   String _defaultSectionContent(String section, RepoSummary summary) {
     switch (section.toLowerCase()) {
       case 'overview':
-        return summary.description;
+        return summary.description.isNotEmpty ? summary.description : 'No description provided.';
       case 'installation':
-        return 'Run `dart pub get` and `dart run`.';
+        return 'Install by cloning the repository and running `dart pub get`.';
       case 'features':
-        return summary.comments.isNotEmpty
-            ? summary.comments.join('\n')
-            : (summary.dependencies.isNotEmpty ? '- ${summary.dependencies.join('\n- ')}' : '- No features specified');
+        return summary.dependencies.isNotEmpty
+            ? 'Features powered by: ${summary.dependencies.join(', ')}'
+            : 'No dependencies specified.';
       default:
-        return 'No content available.';
+        return 'Content for $section is not yet available.';
     }
   }
 
   Future<void> _writeDocs(String docs, String format, String outputType) async {
-    final extension = format == 'rst' ? 'rst' : format == 'asciidoc' ? 'adoc' : 'md';
     if (outputType == 'readme' || outputType == 'both') {
-      final readmeFile = File('README.$extension');
-      await readmeFile.writeAsString(docs);
+      final extension = format == 'rst' ? 'rst' : format == 'asciidoc' ? 'adoc' : 'md';
+      final file = File('README.$extension');
+      await file.writeAsString(docs);
     }
     if (outputType == 'wiki' || outputType == 'both') {
+      final wikiDocs = _convertToWikiFormat(docs, format);
       final wikiDir = Directory('wiki');
       if (!wikiDir.existsSync()) {
         await wikiDir.create();
       }
-      final wikiFile = File('wiki/Home.$extension');
-      await wikiFile.writeAsString(_convertToWikiFormat(docs, format));
+      final extension = format == 'rst' ? 'rst' : format == 'asciidoc' ? 'adoc' : 'md';
+      final file = File('wiki/index.$extension');
+      await file.writeAsString(wikiDocs);
     }
   }
 
   String _convertToWikiFormat(String docs, String format) {
-    if (format == 'markdown') {
-      return docs.replaceFirst('# ', '# Home\n# ');
-    } else if (format == 'rst') {
-      return 'Home\n====\n' + docs;
-    } else if (format == 'asciidoc') {
-      return '= Home\n' + docs;
-    }
     return docs;
   }
 
@@ -159,6 +152,6 @@ ${sections.map((s) => '## $s\n${_defaultSectionContent(s, summary)}').join('\n')
   }
 
   List<double> _generateEmbedding(String docs) {
-    return List.generate(128, (i) => i / 128.0);
+    return List.generate(128, (i) => (i / 128.0) * docs.length / 1000);
   }
 }

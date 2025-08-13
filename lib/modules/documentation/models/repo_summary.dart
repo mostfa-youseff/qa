@@ -1,26 +1,24 @@
 class RepoSummary {
   final String name;
   final String description;
-  final String version;
   final List<String> dependencies;
-  final List<String> comments;
+  final Map<String, List<String>> structure;
 
   RepoSummary({
     required this.name,
     required this.description,
-    required this.version,
     required this.dependencies,
-    required this.comments,
+    required this.structure,
   });
 
   @override
   String toString() {
     return '''
-Name: $name
+Repository: $name
 Description: $description
-Version: $version
 Dependencies: ${dependencies.join(', ')}
-Documentation Comments: ${comments.isNotEmpty ? comments.join('\n') : 'None'}
+Structure:
+${structure.entries.map((e) => '${e.key}:\n  ${e.value.join('\n  ')}').join('\n')}
 ''';
   }
 }

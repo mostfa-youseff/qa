@@ -1,0 +1,6 @@
+Exception: Failed to initialize FFI: Invalid argument(s): Failed to lookup symbol 'llama_last_error': /root/qa/libffi/libllama.so: undefined symbol: llama_last_error
+Exception: Failed to initialize FFI: Invalid argument(s): Failed to load dynamic library '/root/qa/libffi/libllama_capi.so': libllama.so: cannot open shared object file: No such file or directory
+Exception: Failed to initialize FFI: Invalid argument(s): Failed to load dynamic library '/libffi/libllama_capi.so': /libffi/libllama_capi.so: cannot open shared object file: No such file or directory
+Exception: Failed to initialize FFI: Invalid argument(s): Failed to load dynamic library '/libffi/libllama_capi.so': /libffi/libllama_capi.so: cannot open shared object file: No such file or directory
+Exception: Failed to initialize FFI: Invalid argument(s): Failed to load dynamic library '/root/qa/libffi/libllama_capi.so': libllama.so: cannot open shared object file: No such file or directory
+Exception: Private repository requires a valid access token.

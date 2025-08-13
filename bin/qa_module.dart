@@ -1,5 +1,6 @@
-import 'package:qa_module/core/cli_manager.dart';
 import 'package:args/args.dart';
+import 'package:qa_module/core/cli_manager.dart';
+import 'dart:io';
 
 void main(List<String> args) async {
   final parser = ArgParser()
@@ -15,6 +16,11 @@ void main(List<String> args) async {
 
   final results = parser.parse(args);
   final cliManager = CliManager();
+
+  if (results['module'] == null && !results['interactive'] && !results['api']) {
+    print('Error: Module or interactive mode required. Use --help.');
+    exit(1);
+  }
 
   try {
     if (results['api'] as bool) {
@@ -33,5 +39,6 @@ void main(List<String> args) async {
     }
   } catch (e) {
     print('Error: $e');
+    File('error.log').writeAsStringSync('$e\n', mode: FileMode.append);
   }
 }
